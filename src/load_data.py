@@ -7,6 +7,8 @@ Student: Seenivasan M
 This module provides utilities to download, load, and inspect the CIFAR-10
 dataset using PyTorch and torchvision. Downloaded files are stored in the
 'data/' directory, which is excluded from version control via .gitignore.
+Data augmentation transforms (RandomCrop, RandomHorizontalFlip) are available
+to improve model generalization during training.
 """
 
 import os
@@ -43,11 +45,21 @@ def get_default_transform() -> transforms.Compose:
     ])
 
 
+def get_augmentation_transform() -> transforms.Compose:
+    """Return data augmentation transform for training (RandomCrop, RandomHorizontalFlip, ToTensor)."""
+    return transforms.Compose([
+        transforms.RandomCrop(32, padding=4, padding_mode="reflect"),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.ToTensor(),
+    ])
+
+
 def get_cifar10_datasets(
     data_dir: str = DEFAULT_DATA_DIR,
     download: bool = True,
     train_transform: Optional[transforms.Compose] = None,
     test_transform: Optional[transforms.Compose] = None,
+    use_augmentation: bool = False,
 ) -> Tuple[torchvision.datasets.CIFAR10, torchvision.datasets.CIFAR10]:
     """Load CIFAR-10 training and testing datasets.
 
@@ -57,6 +69,7 @@ def get_cifar10_datasets(
         download: If True, downloads the dataset from the internet if not already present.
         train_transform: Optional torchvision transform for training data.
         test_transform: Optional torchvision transform for test data.
+        use_augmentation: If True and train_transform is None, apply data augmentation.
 
     Returns:
         Tuple of (train_dataset, test_dataset).
@@ -64,7 +77,7 @@ def get_cifar10_datasets(
     os.makedirs(data_dir, exist_ok=True)
 
     if train_transform is None:
-        train_transform = get_default_transform()
+        train_transform = get_augmentation_transform() if use_augmentation else get_default_transform()
     if test_transform is None:
         test_transform = get_default_transform()
 
@@ -92,6 +105,7 @@ def get_cifar10_loaders(
     download: bool = True,
     train_transform: Optional[transforms.Compose] = None,
     test_transform: Optional[transforms.Compose] = None,
+    use_augmentation: bool = False,
 ) -> Tuple[DataLoader, DataLoader]:
     """Create PyTorch DataLoaders for CIFAR-10 train and test sets.
 
@@ -102,6 +116,7 @@ def get_cifar10_loaders(
         download: Whether to download if dataset is missing.
         train_transform: Optional transforms for training set.
         test_transform: Optional transforms for test set.
+        use_augmentation: Whether to use data augmentation for training loader.
 
     Returns:
         Tuple of (train_loader, test_loader).
@@ -111,6 +126,7 @@ def get_cifar10_loaders(
         download=download,
         train_transform=train_transform,
         test_transform=test_transform,
+        use_augmentation=use_augmentation,
     )
 
     train_loader = DataLoader(
@@ -171,25 +187,25 @@ def display_sample_images(
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("CIFAR-10 Dataset Loader")
+    print("CIFAR-10 Dataset Loader (with Data Augmentation Support)")
     print(f"Project root: {PROJECT_ROOT}")
     print(f"Data directory: {DEFAULT_DATA_DIR} (respects .gitignore: data/)")
     print("=" * 60)
 
     try:
-        print("\nLoading CIFAR-10 datasets...")
-        train_set, test_set = get_cifar10_datasets(download=True)
+        print("\nLoading CIFAR-10 datasets with data augmentation enabled for training...")
+        train_set, test_set = get_cifar10_datasets(download=True, use_augmentation=True)
 
         print(f"Training samples: {len(train_set):,}")
         print(f"Testing samples:  {len(test_set):,}")
         print(f"Classes ({len(CLASSES)}): {', '.join(CLASSES)}")
 
         sample_img, sample_lbl = train_set[0]
-        print(f"\nSample image tensor shape: {sample_img.shape} (Channels, Height, Width)")
-        print(f"Sample image pixel range: [{sample_img.min():.2f}, {sample_img.max():.2f}]")
+        print(f"\nSample augmented image tensor shape: {sample_img.shape} (Channels, Height, Width)")
+        print(f"Sample augmented image pixel range: [{sample_img.min():.2f}, {sample_img.max():.2f}]")
         print(f"Sample label: {sample_lbl} ({CLASSES[sample_lbl]})")
 
-        train_ldr, test_ldr = get_cifar10_loaders(batch_size=64)
+        train_ldr, test_ldr = get_cifar10_loaders(batch_size=64, use_augmentation=True)
         images, labels = next(iter(train_ldr))
         print(f"\nDataLoader batch shape: {images.shape}")
         print(f"DataLoader labels batch shape: {labels.shape}")
