@@ -12,7 +12,7 @@ and classify them into one of the 10 categories using the trained CNN model.
 import os
 import sys
 import argparse
-from typing import Tuple, Dict, Optional, Any
+from typing import Tuple, Dict, Optional
 from PIL import Image
 
 import torch

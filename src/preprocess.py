@@ -21,7 +21,6 @@ import sys
 from typing import Tuple, Optional, Union
 import torch
 from torch.utils.data import DataLoader, Subset
-import torchvision
 import torchvision.transforms as transforms
 
 # Ensure project root is in sys.path for direct script execution
