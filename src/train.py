@@ -7,7 +7,8 @@ Student: Seenivasan M
 This module defines:
   1. BaselineCNN: A PyTorch convolutional neural network tailored for 32x32 CIFAR-10 images.
   2. Training and evaluation routines with loss and accuracy tracking.
-  3. Model checkpoint saving and loading (saving weights to models/*.pth,
+  3. Integration with data augmentation (RandomCrop, RandomHorizontalFlip) on the training pipeline.
+  4. Model checkpoint saving and loading (saving weights to models/*.pth,
      which is ignored by Git per .gitignore).
 """
 
@@ -277,11 +278,12 @@ def train_model(
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train baseline CNN on CIFAR-10")
+    parser = argparse.ArgumentParser(description="Train baseline CNN on CIFAR-10 with data augmentation")
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs (default: 5)")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for DataLoaders (default: 64)")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate for Adam optimizer (default: 0.001)")
     parser.add_argument("--save-path", type=str, default=DEFAULT_MODEL_PATH, help="Path to save model weights (.pth)")
+    parser.add_argument("--no-augmentation", action="store_true", help="Disable training data augmentation (RandomCrop, RandomHorizontalFlip)")
     parser.add_argument("--dry-run", action="store_true", help="Run model architecture verification without full training")
     return parser.parse_args()
 
@@ -289,11 +291,13 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
     device = get_device()
+    use_augmentation = not args.no_augmentation
 
     print("=" * 65)
-    print("CIFAR-10 Baseline CNN Model & Training Loop")
-    print(f"Project root: {PROJECT_ROOT}")
-    print(f"Active device: {device}")
+    print("CIFAR-10 CNN Model & Training Loop")
+    print(f"Project root:         {PROJECT_ROOT}")
+    print(f"Active device:        {device}")
+    print(f"Data augmentation:    {'ENABLED (RandomCrop, RandomHorizontalFlip)' if use_augmentation else 'DISABLED'}")
     print(f"Checkpoint save path: {args.save_path} (.pth ignored by .gitignore)")
     print("=" * 65)
 
@@ -318,12 +322,13 @@ if __name__ == "__main__":
 
     # Attempt dataset loading and training
     try:
-        print("\nLoading preprocessed CIFAR-10 DataLoaders...")
+        print(f"\nLoading preprocessed CIFAR-10 DataLoaders (augmentation: {use_augmentation})...")
         train_loader, val_loader, test_loader = get_preprocessed_loaders(
             batch_size=args.batch_size,
             val_split=0.1,
             num_workers=0,
             download=True,
+            use_augmentation=use_augmentation,
         )
 
         history = train_model(

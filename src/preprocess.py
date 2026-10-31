@@ -1,22 +1,27 @@
-"""CIFAR-10 Data Preprocessing and Train/Test Splitting.
+"""CIFAR-10 Data Preprocessing, Augmentation, and Train/Test Splitting.
 
 Applied Robotics and AI Project (ARAIP)
 University of Hertfordshire / PSB Academy
 Student: Seenivasan M
 
-This module provides data preprocessing utilities for the CIFAR-10 dataset,
-including:
-  1. Per-channel image normalization (standard CIFAR-10 mean and std).
-  2. Inverse normalization (denormalization) for image visualization.
-  3. Deterministic train/validation/test splitting.
-  4. Preprocessed PyTorch DataLoader generation.
+This module provides data preprocessing and augmentation utilities for the
+CIFAR-10 dataset, including:
+  1. Data augmentation for training images:
+       - RandomCrop(32, padding=4, padding_mode='reflect')
+       - RandomHorizontalFlip(p=0.5)
+  2. Per-channel image normalization (standard CIFAR-10 mean and std).
+  3. Inverse normalization (denormalization) for image visualization.
+  4. Deterministic train/validation/test splitting (training with augmentation,
+     validation/test with clean deterministic normalization).
+  5. Preprocessed PyTorch DataLoader generation.
 """
 
 import os
 import sys
 from typing import Tuple, Optional, Union
 import torch
-from torch.utils.data import DataLoader, random_split, Subset
+from torch.utils.data import DataLoader, Subset
+import torchvision
 import torchvision.transforms as transforms
 
 # Ensure project root is in sys.path for direct script execution
@@ -49,6 +54,39 @@ def get_normalization_transform(
         torchvision.transforms.Compose pipeline.
     """
     return transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std),
+    ])
+
+
+def get_augmentation_transform(
+    mean: Tuple[float, float, float] = CIFAR10_MEAN,
+    std: Tuple[float, float, float] = CIFAR10_STD,
+    crop_padding: int = 4,
+    flip_prob: float = 0.5,
+) -> transforms.Compose:
+    """Return a torchvision transform pipeline that applies data augmentation and normalization.
+
+    Augmentations applied:
+      - RandomCrop(32, padding=crop_padding, padding_mode='reflect'): Shifts the image
+        by up to crop_padding pixels in any direction to introduce translational invariance.
+      - RandomHorizontalFlip(p=flip_prob): Randomly mirrors the image horizontally to
+        teach the model reflectional symmetry.
+      - ToTensor(): Converts PIL image to PyTorch FloatTensor in range [0.0, 1.0].
+      - Normalize(mean, std): Standardizes pixel intensities across each RGB channel.
+
+    Args:
+        mean: Channel-wise means for R, G, B channels.
+        std: Channel-wise standard deviations for R, G, B channels.
+        crop_padding: Pixels to pad on each border before random 32x32 crop.
+        flip_prob: Probability of horizontal flip.
+
+    Returns:
+        torchvision.transforms.Compose pipeline.
+    """
+    return transforms.Compose([
+        transforms.RandomCrop(32, padding=crop_padding, padding_mode="reflect"),
+        transforms.RandomHorizontalFlip(p=flip_prob),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std),
     ])
@@ -92,8 +130,9 @@ def get_preprocessed_datasets(
     download: bool = True,
     mean: Tuple[float, float, float] = CIFAR10_MEAN,
     std: Tuple[float, float, float] = CIFAR10_STD,
+    use_augmentation: bool = True,
 ) -> Tuple[Union[Subset, torch.utils.data.Dataset], Optional[Subset], torch.utils.data.Dataset]:
-    """Load normalized CIFAR-10 and split the training set into train/validation sets.
+    """Load preprocessed CIFAR-10 with data augmentation on training and deterministic eval on val/test.
 
     Args:
         data_dir: Root directory for dataset storage (ignored by .gitignore).
@@ -103,18 +142,29 @@ def get_preprocessed_datasets(
         download: Download dataset if not locally present.
         mean: Per-channel normalization mean.
         std: Per-channel normalization std.
+        use_augmentation: If True, applies RandomCrop and RandomHorizontalFlip to training data.
 
     Returns:
         Tuple of (train_dataset, val_dataset, test_dataset). If val_split is 0,
         val_dataset will be None.
     """
-    transform = get_normalization_transform(mean=mean, std=std)
+    train_transform = get_augmentation_transform(mean=mean, std=std) if use_augmentation else get_normalization_transform(mean=mean, std=std)
+    eval_transform = get_normalization_transform(mean=mean, std=std)
 
-    full_train_dataset, test_dataset = get_cifar10_datasets(
+    # Full train dataset with training transform (augmented)
+    full_train_dataset, _ = get_cifar10_datasets(
         data_dir=data_dir,
         download=download,
-        train_transform=transform,
-        test_transform=transform,
+        train_transform=train_transform,
+        test_transform=eval_transform,
+    )
+
+    # Clean test dataset (unaugmented, only normalized)
+    _, test_dataset = get_cifar10_datasets(
+        data_dir=data_dir,
+        download=download,
+        train_transform=eval_transform,
+        test_transform=eval_transform,
     )
 
     if val_split > 0.0:
@@ -122,12 +172,21 @@ def get_preprocessed_datasets(
         val_size = int(total_train * val_split)
         train_size = total_train - val_size
 
-        generator = torch.Generator().manual_seed(random_seed)
-        train_dataset, val_dataset = random_split(
-            full_train_dataset,
-            [train_size, val_size],
-            generator=generator,
+        # Create validation dataset with eval_transform (no random augmentation)
+        full_val_dataset, _ = get_cifar10_datasets(
+            data_dir=data_dir,
+            download=download,
+            train_transform=eval_transform,
+            test_transform=eval_transform,
         )
+
+        generator = torch.Generator().manual_seed(random_seed)
+        shuffled_indices = torch.randperm(total_train, generator=generator).tolist()
+        train_indices = shuffled_indices[:train_size]
+        val_indices = shuffled_indices[train_size:]
+
+        train_dataset = Subset(full_train_dataset, train_indices)
+        val_dataset = Subset(full_val_dataset, val_indices)
         return train_dataset, val_dataset, test_dataset
 
     return full_train_dataset, None, test_dataset
@@ -142,8 +201,9 @@ def get_preprocessed_loaders(
     download: bool = True,
     mean: Tuple[float, float, float] = CIFAR10_MEAN,
     std: Tuple[float, float, float] = CIFAR10_STD,
+    use_augmentation: bool = True,
 ) -> Tuple[DataLoader, Optional[DataLoader], DataLoader]:
-    """Create normalized DataLoaders for train, validation, and test sets.
+    """Create DataLoaders for train (with augmentation), validation, and test sets.
 
     Args:
         data_dir: Path to directory for dataset. Defaults to 'data/'.
@@ -154,6 +214,7 @@ def get_preprocessed_loaders(
         download: Whether to download if dataset is missing.
         mean: Per-channel mean for normalization.
         std: Per-channel std for normalization.
+        use_augmentation: Whether to apply data augmentation to training data.
 
     Returns:
         Tuple of (train_loader, val_loader, test_loader).
@@ -165,6 +226,7 @@ def get_preprocessed_loaders(
         download=download,
         mean=mean,
         std=std,
+        use_augmentation=use_augmentation,
     )
 
     train_loader = DataLoader(
@@ -195,7 +257,7 @@ def get_preprocessed_loaders(
 
 def verify_batch_statistics(images: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute channel-wise mean and std of a batch of image tensors to verify normalization."""
-    # images shape: (B, C, H, W) -> permute to (C, B, H, W) and compute over remaining dimensions
+    # images shape: (B, C, H, W) -> compute over batch and spatial dimensions
     mean = images.mean(dim=[0, 2, 3])
     std = images.std(dim=[0, 2, 3])
     return mean, std
@@ -203,39 +265,42 @@ def verify_batch_statistics(images: torch.Tensor) -> Tuple[torch.Tensor, torch.T
 
 if __name__ == "__main__":
     print("=" * 65)
-    print("CIFAR-10 Data Preprocessing (Normalization & Train/Test Split)")
+    print("CIFAR-10 Data Preprocessing & Data Augmentation Pipeline")
     print(f"Project root: {PROJECT_ROOT}")
     print(f"Target data directory: {DEFAULT_DATA_DIR}")
     print(f"Normalization Mean (RGB): {CIFAR10_MEAN}")
     print(f"Normalization Std  (RGB): {CIFAR10_STD}")
+    print(f"Augmentation: RandomCrop(32, padding=4), RandomHorizontalFlip(p=0.5)")
     print("=" * 65)
 
     try:
-        print("\nLoading preprocessed datasets with 90/10 train-validation split...")
+        print("\nLoading preprocessed datasets with data augmentation enabled...")
         train_set, val_set, test_set = get_preprocessed_datasets(
             val_split=0.1,
             random_seed=42,
             download=True,
+            use_augmentation=True,
         )
 
         val_count = len(val_set) if val_set is not None else 0
         print(f"\nDataset split counts:")
-        print(f"  - Training samples:   {len(train_set):,}")
-        print(f"  - Validation samples: {val_count:,}")
-        print(f"  - Testing samples:    {len(test_set):,}")
-        print(f"  - Total samples:      {len(train_set) + val_count + len(test_set):,}")
+        print(f"  - Training samples (augmented):   {len(train_set):,}")
+        print(f"  - Validation samples (eval-only): {val_count:,}")
+        print(f"  - Testing samples (eval-only):    {len(test_set):,}")
+        print(f"  - Total samples:                  {len(train_set) + val_count + len(test_set):,}")
 
         train_ldr, val_ldr, test_ldr = get_preprocessed_loaders(
             batch_size=64,
             val_split=0.1,
             num_workers=0,
             download=True,
+            use_augmentation=True,
         )
 
         batch_imgs, batch_lbls = next(iter(train_ldr))
         ch_mean, ch_std = verify_batch_statistics(batch_imgs)
 
-        print(f"\nDataLoader Batch Verification:")
+        print(f"\nAugmented DataLoader Batch Verification:")
         print(f"  - Batch image tensor shape: {batch_imgs.shape} (B, C, H, W)")
         print(f"  - Batch labels tensor shape: {batch_lbls.shape}")
         print(f"  - Normalized pixel range:   [{batch_imgs.min():.2f}, {batch_imgs.max():.2f}]")
@@ -247,8 +312,8 @@ if __name__ == "__main__":
         print(f"\nDenormalization Verification:")
         print(f"  - Restored pixel range:     [{denorm_batch.min():.2f}, {denorm_batch.max():.2f}] (within [0, 1])")
 
-        print("\nData preprocessing module initialized and verified successfully.")
+        print("\nData preprocessing & augmentation module initialized and verified successfully.")
 
     except Exception as exc:
         print(f"\nNotice: Dataset download or loading encountered an issue: {exc}")
-        print("When connected to the internet, run 'python src/preprocess.py' to download and preprocess.")
+        print("When connected to the internet, run 'python src/preprocess.py' to download and test augmentation.")
